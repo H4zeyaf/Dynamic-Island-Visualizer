@@ -30,7 +30,7 @@ Open your terminal or PowerShell and run the following commands:
 ```powershell
 spicetify config extensions dynamicViz.js
 spicetify apply
-
+```
 ## 📜 Credits & Acknowledgements
 
 * **UI Design**: Inspired by the Apple **Dynamic Island** interface.
