@@ -8,7 +8,7 @@
 
 ##  Key Features
 
-* **Adaptive Color Engine**: Uses a robust "Dribbblish-style" canvas extraction method to grab colors directly from album art. It bypasses broken APIs and includes a "darkness check" to ensure visibility on all tracks.
+* **Adaptive Color Engine**: Uses a robust Dribbblish-Dynamic style canvas extraction method to grab colors directly from album art. It bypasses broken APIs and includes a "darkness check" to ensure visibility on all tracks.
 * **Pro Physics Engine**: Features **Asymmetric Physics** with a snappy "Fast Attack" (upward movement) and a smooth, gravity-based "Decay" (downward movement).
 * **Rhythmic Beat-Sync**: Taps into Spotify's internal `AudioAnalysis` to pulse in sync with the song's actual beats, tatums, and loudness segments.
 * **GPU Optimized**: Utilizes hardware-accelerated CSS transforms (`scaleY`) and `will-change` hints for smooth 60fps performance without taxing your CPU.
