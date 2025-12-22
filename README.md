@@ -19,7 +19,7 @@
 ##  Installation
 
 ### 1. Download the script
-Download the [dynamicViz.js](https://github.com/YOUR_USERNAME/YOUR_REPO/blob/main/dynamicViz.js) file and place it in your Spicetify Extensions folder:
+Download the [dynamicViz.js](https://github.com/ghamza127/Dynamic-Island-Visualizer/blob/main/dynamicViz.js) file and place it in your Spicetify Extensions folder:
 
 * **Windows**: `%AppData%\Spicetify\Extensions\`
 * **macOS/Linux**: `~/.spicetify/Extensions/`
@@ -35,7 +35,6 @@ spicetify apply
 
 * **UI Design**: Inspired by the Apple **Dynamic Island** interface.
 * **Color Logic**: This extension uses a modified version of the Canvas Extractor class from **[Dribbblish Dynamic](https://github.com/JulienMaille/dribbblish-dynamic-theme)**. Huge thanks to **Julien Maille** and the contributors of that project for their robust approach to color sourcing in Spotify.
-* **Development**: Crafted as a collaboration between the Spicetify community and.
 
 ---
 
