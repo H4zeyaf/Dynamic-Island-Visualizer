@@ -15,7 +15,7 @@
 * **Zero-Dependency**: Works perfectly on vanilla Spotify. No specific themes or external CSS frameworks required.
 
 <div align="center">
-  <img src="demo.gif" alt="Dynamic Island Demo" width="400">
+  <img src="demo.gif" alt="Dynamic Island Demo" width="800">
   <p><i>The visualizer in sync with the beat</i></p>
 </div>
 
