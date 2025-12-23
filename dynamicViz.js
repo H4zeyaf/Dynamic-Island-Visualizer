@@ -1,57 +1,79 @@
 // NAME: Dynamic Island Visualizer
 // AUTHOR: ghamza127
-// VERSION: 3.2
-/**
- * CREDITS:
- * - Dynamic Island UI inspired by Apple Inc.
- * - Color Extraction logic adapted from Dribbblish Dynamic by:
- * Julien Maille (https://github.com/JulienMaille)
- * and the Dribbblish Dynamic contributors.
- */
+// VERSION: 4.2
+// DESCRIPTION: Beat-synced visualizer with vibrant 5x5 color averaging.
 
 (async function DynamicViz() {
-    /** * 1. CRITICAL SELECTORS
-     * If the visualizer disappears, Spotify likely renamed these classes.
-     * Use Ctrl+Shift+I in Spotify to find the new class names for the progress bar and album art.
+    /** * 1. SELECTORS & CONSTANTS
+     * Change BAR_SELECTOR if the visualizer moves or disappears after a Spotify update.
      */
-    const BAR_SELECTOR = ".playback-bar";
+    const BAR_SELECTOR = ".player-controls__left";
     const ART_SELECTOR = ".main-nowPlayingWidget-coverArt img, .cover-art img, .main-coverSlotCollapsed-container img";
     
-    // Global variables for audio analysis and animation state
     let audioData = null;
     let beats = [];
     let currentPitches = new Array(6).fill(0);
     let targetPitches = new Array(6).fill(0);
 
     /**
-     * 2. COLOR EXTRACTION ENGINE (Dribbblish Method)
-     * Recreates the album art in a 1x1 canvas to find the average color.
-     * This bypasses Spicetify.getColors if that API is broken.
+     * 2. LUMINANCE UTILITY
+     * Standard formula to determine perceived brightness (0-255).
      */
-    async function getDribbblishColor() {
+    function getLuminance(r, g, b) {
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    }
+
+    /**
+     * 3. VIBRANT AVERAGE ENGINE
+     * Downsamples the album art to a 5x5 grid and averages only non-black pixels.
+     * This avoids picking up dark borders and prevents "blackout" visualizers.
+     */
+    async function getVibrantAverageColor() {
         const imgElement = document.querySelector(ART_SELECTOR);
-        if (!imgElement) return "#1db954"; // Default Spotify Green if art not found
+        if (!imgElement) return "#1db954"; // Default Spotify Green
 
         return new Promise((resolve) => {
             const img = new Image();
-            // crossOrigin is vital; without it, the canvas will be "tainted" and unreadable.
-            img.crossOrigin = "Anonymous";
+            img.crossOrigin = "Anonymous"; // Required to read pixel data from Spotify's CDN
             img.onload = () => {
                 const canvas = document.createElement("canvas");
                 const ctx = canvas.getContext("2d");
-                canvas.width = 1;
-                canvas.height = 1;
-                // Draw image into 1 pixel to get the "average" color
-                ctx.drawImage(img, 0, 0, 1, 1);
-                const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
                 
-                // ADJUSTMENT: If the album is very dark, we boost the RGB values
-                // so the visualizer stays visible on dark themes.
-                if (r + g + b < 50) {
-                    resolve(`rgb(${r + 60}, ${g + 60}, ${b + 60})`);
-                } else {
-                    resolve(`rgb(${r}, ${g}, ${b})`);
+                // Downsampling to 5x5 for performance and better color distribution
+                canvas.width = 5;
+                canvas.height = 5;
+                ctx.drawImage(img, 0, 0, 5, 5);
+                
+                const imageData = ctx.getImageData(0, 0, 5, 5).data;
+                let rTotal = 0, gTotal = 0, bTotal = 0, count = 0;
+
+                for (let i = 0; i < imageData.length; i += 4) {
+                    const r = imageData[i];
+                    const g = imageData[i+1];
+                    const b = imageData[i+2];
+                    
+                    // Filter: Skip pixels that are too dark to contribute to a 'vibrant' look
+                    if (getLuminance(r, g, b) > 35) {
+                        rTotal += r; gTotal += g; bTotal += b;
+                        count++;
+                    }
                 }
+
+                // Fallback: If the whole image is too dark, pick the center pixel and boost it
+                if (count === 0) {
+                    let r = imageData[48], g = imageData[49], b = imageData[50];
+                    resolve(`rgb(${Math.min(255, r + 85)}, ${Math.min(255, g + 85)}, ${Math.min(255, b + 85)})`);
+                    return;
+                }
+
+                let fR = Math.floor(rTotal / count), fG = Math.floor(gTotal / count), fB = Math.floor(bTotal / count);
+
+                // Final safety: Ensure the result isn't a muddy grey
+                if (getLuminance(fR, fG, fB) < 60) {
+                    fR = Math.min(255, fR + 40); fG = Math.min(255, fG + 40); fB = Math.min(255, fB + 40);
+                }
+
+                resolve(`rgb(${fR}, ${fG}, ${fB})`);
             };
             img.onerror = () => resolve("#1db954");
             img.src = imgElement.src;
@@ -59,66 +81,57 @@
     }
 
     /**
-     * 3. DATA REFRESHER
-     * Runs every time the song changes.
-     * Fetches the "map" of the song (segments and beats) from Spotify.
+     * 4. TRACK DATA REFRESHER
+     * Fetches audio analysis (beats/loudness) and updates the visualizer color.
      */
     async function refreshVisuals() {
         const item = Spicetify.Player.data?.item;
         if (!item) return;
-
         try {
-            // This API fetches the pre-analyzed loudness/pitch data for the track
             const data = await Spicetify.getAudioData(item.uri);
-            if (data) {
-                audioData = data.segments || null;
-                beats = data.beats || [];
-            }
-        } catch (e) { 
-            console.error("DynamicViz: Audio data failed", e);
-            audioData = null; 
-        }
+            if (data) { audioData = data.segments || null; beats = data.beats || []; }
+        } catch (e) { audioData = null; }
 
-        // Apply colors after song change
-        const color = await getDribbblishColor();
+        const color = await getVibrantAverageColor();
         const wrapper = document.getElementById("dynamic-island-viz");
         if (wrapper) {
             wrapper.style.setProperty('--viz-color', color);
-            wrapper.style.setProperty('--viz-glow', color + "88"); // 88 = ~50% opacity
+            // Format RGB string into RGBA for the glow effect
+            const glow = color.replace(')', ', 0.5)').replace('rgb', 'rgba');
+            wrapper.style.setProperty('--viz-glow', glow);
         }
     }
 
     /**
-     * 4. INITIALIZATION
-     * Injects the CSS and creates the HTML container for the 6 pills.
+     * 5. INITIALIZATION & STYLING
+     * Injects the HTML and CSS into the Spotify UI.
      */
     async function init() {
-        const playbackBar = document.querySelector(BAR_SELECTOR);
-        if (!playbackBar || !Spicetify.Player) {
-            setTimeout(init, 500); // Retry if Spotify UI hasn't loaded yet
+        const controlsLeft = document.querySelector(BAR_SELECTOR);
+        if (!controlsLeft || !Spicetify.Player) {
+            setTimeout(init, 500); // Retry if UI is still loading
             return;
         }
-
         if (document.getElementById("dynamic-island-viz")) return;
 
         const style = document.createElement("style");
         style.innerHTML = `
             #dynamic-island-viz {
                 display: flex; align-items: center; justify-content: center;
-                gap: 3px; height: 20px; width: 40px;
-                margin-right: 12px; margin-left: 8px;
+                gap: 3px; height: 16px; width: 38px;
+                align-self: center; margin-right: 12px;
                 --viz-color: #1db954;
-                --viz-glow: rgba(29, 185, 84, 0.4);
+                --viz-glow: rgba(29, 185, 185, 0.4);
             }
             .viz-pill {
                 width: 3px; height: 100%;
                 background-color: var(--viz-color);
                 border-radius: 10px;
-                transform-origin: center; /* Ensures pills expand from the middle */
+                transform-origin: center;
                 transform: scaleY(0.2);
-                will-change: transform; /* Triggers GPU acceleration */
+                will-change: transform;
                 transition: background-color 0.8s ease;
-                box-shadow: 0 0 10px var(--viz-glow);
+                box-shadow: 0 0 8px var(--viz-glow);
             }
         `;
         document.head.append(style);
@@ -131,69 +144,45 @@
             container.appendChild(b);
         }
         
-        playbackBar.prepend(container);
+        controlsLeft.prepend(container); // Anchors viz next to the shuffle button
         const bars = container.querySelectorAll(".viz-pill");
 
-        // Listeners to trigger data and color updates
         Spicetify.Player.addEventListener("songchange", refreshVisuals);
         Spicetify.Player.addEventListener("onplaypause", refreshVisuals);
         refreshVisuals();
 
         /**
-         * 5. ANIMATION ENGINE
-         * Runs at 60fps. Handles the physics and the "bounce" logic.
+         * 6. ANIMATION LOOP
+         * Runs at 60fps to handle physics-based scaling.
          */
         function animate() {
             if (Spicetify.Player.isPlaying() && audioData) {
-                const progress = Spicetify.Player.getProgress() / 1000; // Current song time in seconds
-                
-                // Find where we are in the song's audio segments
-                const segment = audioData.find(s => progress >= s.start && progress < (s.start + s.duration));
-                
-                // Calculate "Beat Impact" to add an extra pulse on the rhythm
-                const currentBeat = beats.find(b => progress >= b.start && progress < (b.start + b.duration));
-                const beatImpact = currentBeat ? (1 - (progress - currentBeat.start) / currentBeat.duration) : 0;
+                const prog = Spicetify.Player.getProgress() / 1000;
+                const seg = audioData.find(s => prog >= s.start && prog < (s.start + s.duration));
+                const beat = beats.find(b => prog >= b.start && prog < (b.start + b.duration));
+                const impact = beat ? (1 - (prog - beat.start) / beat.duration) : 0;
 
-                if (segment) {
-                    // loudness_max is usually -60 to 0. We map it to a 0.4 - 1.0 range.
-                    const loudness = Math.max(0.4, (segment.loudness_max + 35) / 20);
-                    const boost = beatImpact * 0.3; 
-                    
-                    // Map 6 specific musical pitches to our 6 bars
+                if (seg) {
+                    const loud = Math.max(0.4, (seg.loudness_max + 35) / 20);
+                    const bst = impact * 0.3; 
                     targetPitches = [
-                        (segment.pitches[0] + boost) * loudness,
-                        (segment.pitches[2] + boost) * loudness,
-                        (segment.pitches[4] + boost) * loudness,
-                        (segment.pitches[7] + boost) * loudness,
-                        (segment.pitches[9] + boost) * loudness,
-                        (segment.pitches[11] + boost) * loudness
+                        (seg.pitches[0] + bst) * loud, (seg.pitches[2] + bst) * loud,
+                        (seg.pitches[4] + bst) * loud, (seg.pitches[7] + bst) * loud,
+                        (seg.pitches[9] + bst) * loud, (seg.pitches[11] + bst) * loud
                     ];
                 }
-            } else { 
-                targetPitches.fill(0.2); // Baseline height when paused
-            }
+            } else { targetPitches.fill(0.2); }
 
-            // PHYSICS LOOP: Attack and Decay
+            // PHYSICS: Snap up (0.6) and float down (0.08)
             bars.forEach((bar, i) => {
-                const target = targetPitches[i];
-                const current = currentPitches[i];
-                
-                // If target > current, we are "Attacking" (jumping up). 
-                // If target < current, we are "Decaying" (falling down).
-                // 0.6 = Very fast jump. 0.08 = Smooth, floaty fall.
-                currentPitches[i] += (target - current) * (target > current ? 0.6 : 0.08);
-
-                // Add a high-frequency sine wave for a "vibrating" breath effect
+                const t = targetPitches[i], c = currentPitches[i];
+                currentPitches[i] += (t - c) * (t > c ? 0.6 : 0.08);
                 const breath = Spicetify.Player.isPlaying() ? (Math.sin(Date.now() / 50 + i) * 0.03) : 0;
-                
-                // Apply the final vertical scale
                 bar.style.transform = `scaleY(${Math.max(0.2, currentPitches[i] + breath)})`;
             });
-
-            requestAnimationFrame(animate); // Queue next frame
+            requestAnimationFrame(animate);
         }
         animate();
     }
     init();
-
 })();
