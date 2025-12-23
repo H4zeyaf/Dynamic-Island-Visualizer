@@ -1,7 +1,5 @@
 // NAME: Dynamic Island Visualizer
 // AUTHOR: ghamza127
-// VERSION: 4.2
-// DESCRIPTION: Beat-synced visualizer with vibrant 5x5 color averaging.
 
 (async function DynamicViz() {
     /** * 1. SELECTORS & CONSTANTS
@@ -186,3 +184,4 @@
     }
     init();
 })();
+
