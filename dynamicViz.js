@@ -1,5 +1,5 @@
 // NAME: Dynamic Island Visualizer
-// AUTHOR: ghamza127
+// AUTHOR: H4zeyaf
 
 (async function DynamicViz() {
     /** * 1. SELECTORS & CONSTANTS
@@ -184,4 +184,5 @@
     }
     init();
 })();
+
 
