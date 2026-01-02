@@ -2,9 +2,6 @@
 // AUTHOR: H4zeyaf
 
 (async function DynamicViz() {
-    /** * 1. SELECTORS & CONSTANTS
-     * Change BAR_SELECTOR if the visualizer moves or disappears after a Spotify update.
-     */
     const BAR_SELECTOR = ".player-controls__left";
     const ART_SELECTOR = ".main-nowPlayingWidget-coverArt img, .cover-art img, .main-coverSlotCollapsed-container img";
     
@@ -12,66 +9,43 @@
     let beats = [];
     let currentPitches = new Array(6).fill(0);
     let targetPitches = new Array(6).fill(0);
+    
+    // Automatic Gain Control (AGC) state
+    let loudnessHistory = [];
 
-    /**
-     * 2. LUMINANCE UTILITY
-     * Standard formula to determine perceived brightness (0-255).
-     */
-    function getLuminance(r, g, b) {
-        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-    }
+    // --- COLOR HELPERS ---
+    function getLuminance(r, g, b) { return 0.2126 * r + 0.7152 * g + 0.0722 * b; }
 
-    /**
-     * 3. VIBRANT AVERAGE ENGINE
-     * Downsamples the album art to a 5x5 grid and averages only non-black pixels.
-     * This avoids picking up dark borders and prevents "blackout" visualizers.
+    /** * MANUAL EXTRACTOR: 
+     * Used if no dynamic theme is detected. 
+     * Averages the vibrant pixels of the album art. 
      */
     async function getVibrantAverageColor() {
         const imgElement = document.querySelector(ART_SELECTOR);
-        if (!imgElement) return "#1db954"; // Default Spotify Green
-
+        if (!imgElement) return "#1db954";
         return new Promise((resolve) => {
             const img = new Image();
-            img.crossOrigin = "Anonymous"; // Required to read pixel data from Spotify's CDN
+            img.crossOrigin = "Anonymous";
             img.onload = () => {
                 const canvas = document.createElement("canvas");
                 const ctx = canvas.getContext("2d");
-                
-                // Downsampling to 5x5 for performance and better color distribution
-                canvas.width = 5;
-                canvas.height = 5;
+                canvas.width = 5; canvas.height = 5;
                 ctx.drawImage(img, 0, 0, 5, 5);
-                
                 const imageData = ctx.getImageData(0, 0, 5, 5).data;
                 let rTotal = 0, gTotal = 0, bTotal = 0, count = 0;
-
                 for (let i = 0; i < imageData.length; i += 4) {
-                    const r = imageData[i];
-                    const g = imageData[i+1];
-                    const b = imageData[i+2];
-                    
-                    // Filter: Skip pixels that are too dark to contribute to a 'vibrant' look
-                    if (getLuminance(r, g, b) > 35) {
-                        rTotal += r; gTotal += g; bTotal += b;
-                        count++;
+                    if (getLuminance(imageData[i], imageData[i+1], imageData[i+2]) > 35) {
+                        rTotal += imageData[i]; gTotal += imageData[i+1]; bTotal += imageData[i+2]; count++;
                     }
                 }
-
-                // Fallback: If the whole image is too dark, pick the center pixel and boost it
                 if (count === 0) {
-                    let r = imageData[48], g = imageData[49], b = imageData[50];
-                    resolve(`rgb(${Math.min(255, r + 85)}, ${Math.min(255, g + 85)}, ${Math.min(255, b + 85)})`);
-                    return;
+                     let r = imageData[48], g = imageData[49], b = imageData[50];
+                     resolve(`rgb(${Math.min(255, r + 80)}, ${Math.min(255, g + 80)}, ${Math.min(255, b + 80)})`);
+                     return;
                 }
-
-                let fR = Math.floor(rTotal / count), fG = Math.floor(gTotal / count), fB = Math.floor(bTotal / count);
-
-                // Final safety: Ensure the result isn't a muddy grey
-                if (getLuminance(fR, fG, fB) < 60) {
-                    fR = Math.min(255, fR + 40); fG = Math.min(255, fG + 40); fB = Math.min(255, fB + 40);
-                }
-
-                resolve(`rgb(${fR}, ${fG}, ${fB})`);
+                let fR = Math.floor(rTotal/count), fG = Math.floor(gTotal/count), fB = Math.floor(bTotal/count);
+                if (getLuminance(fR, fG, fB) < 60) { fR += 40; fG += 40; fB += 40; }
+                resolve(`rgb(${Math.min(255, fR)}, ${Math.min(255, fG)}, ${Math.min(255, fB)})`);
             };
             img.onerror = () => resolve("#1db954");
             img.src = imgElement.src;
@@ -79,37 +53,54 @@
     }
 
     /**
-     * 4. TRACK DATA REFRESHER
-     * Fetches audio analysis (beats/loudness) and updates the visualizer color.
+     * SYNC LOGIC:
+     * checks if a theme is active. If the theme color is generic (green/white/black),
+     * it ignores it and uses the manual extractor.
+     * personally only tested it with dribblish dynamic since that's how i based a lot of the color engine
      */
+    async function getSyncColor() {
+        const rootStyle = getComputedStyle(document.documentElement);
+        const themeColor = rootStyle.getPropertyValue('--spice-button-active').trim().toLowerCase();
+        
+        // list of 'Generic' colors to ignore (Standard Spotify Green and common greyscale)
+        const genericColors = ["#1db954", "#1ed760", "#ffffff", "#000000", "rgb(29, 185, 84)"];
+
+        // 1. If there's a theme color and it's NOT generic, trust the theme
+        if (themeColor && !genericColors.includes(themeColor)) {
+            return themeColor;
+        }
+
+        // 2. Otherwise, calculate it from the image
+        return await getVibrantAverageColor();
+    }
+
     async function refreshVisuals() {
         const item = Spicetify.Player.data?.item;
         if (!item) return;
         try {
             const data = await Spicetify.getAudioData(item.uri);
-            if (data) { audioData = data.segments || null; beats = data.beats || []; }
+            if (data) { 
+                audioData = data.segments || null; 
+                beats = data.beats || []; 
+                loudnessHistory = [];
+            }
         } catch (e) { audioData = null; }
 
-        const color = await getVibrantAverageColor();
+        const color = await getSyncColor();
         const wrapper = document.getElementById("dynamic-island-viz");
         if (wrapper) {
             wrapper.style.setProperty('--viz-color', color);
-            // Format RGB string into RGBA for the glow effect
-            const glow = color.replace(')', ', 0.5)').replace('rgb', 'rgba');
+            // Handle both hex and rgb strings for the glow
+            const glow = color.startsWith('rgb') 
+                ? color.replace(')', ', 0.5)').replace('rgb', 'rgba') 
+                : color + "88"; 
             wrapper.style.setProperty('--viz-glow', glow);
         }
     }
 
-    /**
-     * 5. INITIALIZATION & STYLING
-     * Injects the HTML and CSS into the Spotify UI.
-     */
     async function init() {
         const controlsLeft = document.querySelector(BAR_SELECTOR);
-        if (!controlsLeft || !Spicetify.Player) {
-            setTimeout(init, 500); // Retry if UI is still loading
-            return;
-        }
+        if (!controlsLeft || !Spicetify.Player) { setTimeout(init, 500); return; }
         if (document.getElementById("dynamic-island-viz")) return;
 
         const style = document.createElement("style");
@@ -128,7 +119,6 @@
                 transform-origin: center;
                 transform: scaleY(0.2);
                 will-change: transform;
-                transition: background-color 0.8s ease;
                 box-shadow: 0 0 8px var(--viz-glow);
             }
         `;
@@ -142,41 +132,62 @@
             container.appendChild(b);
         }
         
-        controlsLeft.prepend(container); // Anchors viz next to the shuffle button
+        controlsLeft.prepend(container);
         const bars = container.querySelectorAll(".viz-pill");
 
         Spicetify.Player.addEventListener("songchange", refreshVisuals);
         Spicetify.Player.addEventListener("onplaypause", refreshVisuals);
         refreshVisuals();
 
-        /**
-         * 6. ANIMATION LOOP
-         * Runs at 60fps to handle physics-based scaling.
-         */
         function animate() {
             if (Spicetify.Player.isPlaying() && audioData) {
-                const prog = Spicetify.Player.getProgress() / 1000;
-                const seg = audioData.find(s => prog >= s.start && prog < (s.start + s.duration));
-                const beat = beats.find(b => prog >= b.start && prog < (b.start + b.duration));
-                const impact = beat ? (1 - (prog - beat.start) / beat.duration) : 0;
+                const lookaheadTime = 0.050; 
+                const progress = (Spicetify.Player.getProgress() / 1000) + lookaheadTime;
+                
+                const segment = audioData.find(s => progress >= s.start && progress < (s.start + s.duration));
+                const beat = beats.find(b => progress >= b.start && progress < (b.start + b.duration));
+                
+                // Beat Impact
+                const impact = beat ? Math.max(0, 1 - (progress - beat.start) / (beat.duration * 0.8)) : 0;
 
-                if (seg) {
-                    const loud = Math.max(0.4, (seg.loudness_max + 35) / 20);
-                    const bst = impact * 0.3; 
+                if (segment) {
+                    // AGC Logic
+                    const currentLoudnessRaw = segment.loudness_max;
+                    loudnessHistory.push(currentLoudnessRaw);
+                    if (loudnessHistory.length > 100) loudnessHistory.shift();
+                    const localMax = Math.max(...loudnessHistory, -20);
+                    
+                    let normalizedVolume = Math.pow(Math.max(0, (currentLoudnessRaw + 60) / (localMax + 60)), 2);
+
+                    // NOISE GATE
+                    if (normalizedVolume < 0.05) normalizedVolume = 0;
+
+                    // PITCH-COUPLED PHYSICS
+                    const beatBoost = 1 + (impact * 0.6);
+
                     targetPitches = [
-                        (seg.pitches[0] + bst) * loud, (seg.pitches[2] + bst) * loud,
-                        (seg.pitches[4] + bst) * loud, (seg.pitches[7] + bst) * loud,
-                        (seg.pitches[9] + bst) * loud, (seg.pitches[11] + bst) * loud
+                        segment.pitches[0] * normalizedVolume * beatBoost,
+                        segment.pitches[2] * normalizedVolume * beatBoost,
+                        segment.pitches[4] * normalizedVolume * beatBoost,
+                        segment.pitches[7] * normalizedVolume * beatBoost,
+                        segment.pitches[9] * normalizedVolume * beatBoost,
+                        segment.pitches[11] * normalizedVolume * beatBoost
                     ];
                 }
-            } else { targetPitches.fill(0.2); }
+            } else { targetPitches.fill(0.15); }
 
-            // PHYSICS: Snap up (0.6) and float down (0.08)
             bars.forEach((bar, i) => {
-                const t = targetPitches[i], c = currentPitches[i];
-                currentPitches[i] += (t - c) * (t > c ? 0.6 : 0.08);
-                const breath = Spicetify.Player.isPlaying() ? (Math.sin(Date.now() / 50 + i) * 0.03) : 0;
-                bar.style.transform = `scaleY(${Math.max(0.2, currentPitches[i] + breath)})`;
+                const target = targetPitches[i];
+                const current = currentPitches[i];
+                
+                if (target > current) {
+                    currentPitches[i] += (target - current) * 0.7; 
+                } else {
+                    currentPitches[i] += (target - current) * 0.15;
+                }
+
+                const height = Math.max(0.15, Math.min(1.0, currentPitches[i]));
+                bar.style.transform = `scaleY(${height})`;
             });
             requestAnimationFrame(animate);
         }
