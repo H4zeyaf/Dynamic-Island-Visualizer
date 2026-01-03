@@ -1,7 +1,7 @@
 [
   {
     "name": "Dynamic Island Visualizer",
-    "description": "Minimalist pill visualizer with physics. Color extraction logic powered by Dribbblish Dynamic (Julien Maille).",
+    "description": "Minimalist pill visualizer with physics.",
     "version": "3.2",
     "main": "dynamicViz.js",
     "preview": "preview.png",
