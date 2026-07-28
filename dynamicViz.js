@@ -1,10 +1,14 @@
 // NAME: Dynamic Island Visualizer
-// AUTHOR: H4zeyaf
+// AUTHOR: Gemini & [Your Name]
+// VERSION: 7.0
+// DESCRIPTION: Dynamic Island style with Pitch-Specific Physics and Dribbblish Theme Sync.
+// Uses Platform.PlayerAPI directly to bypass broken Spicetify.Player wrapper (v2.43+).
 
 (async function DynamicViz() {
     const BAR_SELECTOR = ".player-controls__left";
     const ART_SELECTOR = ".main-nowPlayingWidget-coverArt img, .cover-art img, .main-coverSlotCollapsed-container img";
     
+    // Engine Variables
     let audioData = null;
     let beats = [];
     let currentPitches = new Array(6).fill(0);
@@ -12,6 +16,13 @@
     
     // Automatic Gain Control (AGC) state
     let loudnessHistory = [];
+
+    // --- PLAYER STATE HELPER ---
+    // Spicetify.Player.data is broken (undefined) in v2.43+
+    // Access the real state via Platform.PlayerAPI._state
+    function getPlayerState() {
+        return Spicetify.Platform?.PlayerAPI?._state || null;
+    }
 
     // --- COLOR HELPERS ---
     function getLuminance(r, g, b) { return 0.2126 * r + 0.7152 * g + 0.0722 * b; }
@@ -54,37 +65,57 @@
 
     /**
      * SYNC LOGIC:
-     * checks if a theme is active. If the theme color is generic (green/white/black),
+     * Checks if a theme is active. If the theme color is generic (green/white/black),
      * it ignores it and uses the manual extractor.
-     * personally only tested it with dribblish dynamic since that's how i based a lot of the color engine
      */
     async function getSyncColor() {
         const rootStyle = getComputedStyle(document.documentElement);
         const themeColor = rootStyle.getPropertyValue('--spice-button-active').trim().toLowerCase();
         
-        // list of 'Generic' colors to ignore (Standard Spotify Green and common greyscale)
+        // List of 'Generic' colors to ignore (Standard Spotify Green and common greyscale)
         const genericColors = ["#1db954", "#1ed760", "#ffffff", "#000000", "rgb(29, 185, 84)"];
 
-        // 1. If there's a theme color and it's NOT generic, trust the theme
+        // 1. If we have a theme color and it's NOT generic, trust the theme (Dribbblish mode)
         if (themeColor && !genericColors.includes(themeColor)) {
             return themeColor;
         }
 
-        // 2. Otherwise, calculate it from the image
+        // 2. Otherwise, calculate it ourselves from the image
         return await getVibrantAverageColor();
     }
 
+    // Bypass broken Spicetify.getAudioData and CosmosAsync
+    // Use fetch() with the session access token directly
+    async function fetchAudioData(uri) {
+        const trackId = uri.split(':').pop();
+        const token = Spicetify.Platform.Session.accessToken;
+        const url = `https://spclient.wg.spotify.com/audio-attributes/v1/audio-analysis/${trackId}?format=json`;
+        const res = await fetch(url, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!res.ok) throw new Error(`Audio data fetch failed: ${res.status}`);
+        return res.json();
+    }
+
     async function refreshVisuals() {
-        const item = Spicetify.Player.data?.item;
-        if (!item) return;
+        const state = getPlayerState();
+        if (!state) return;
+        
+        // PlayerAPI._state uses .item for the current track
+        const trackObj = state.item;
+        if (!trackObj || !trackObj.uri) return;
+        
         try {
-            const data = await Spicetify.getAudioData(item.uri);
+            const data = await fetchAudioData(trackObj.uri);
             if (data) { 
                 audioData = data.segments || null; 
                 beats = data.beats || []; 
                 loudnessHistory = [];
             }
-        } catch (e) { audioData = null; }
+        } catch (e) { 
+            console.warn('[DynamicViz] Failed to get audio data:', e);
+            audioData = null; 
+        }
 
         const color = await getSyncColor();
         const wrapper = document.getElementById("dynamic-island-viz");
@@ -99,8 +130,13 @@
     }
 
     async function init() {
+        // Wait for Platform.PlayerAPI and Session to be fully loaded
+        if (!Spicetify?.Platform?.PlayerAPI?._state || !Spicetify?.Platform?.Session?.accessToken) { 
+            setTimeout(init, 300); 
+            return; 
+        }
         const controlsLeft = document.querySelector(BAR_SELECTOR);
-        if (!controlsLeft || !Spicetify.Player) { setTimeout(init, 500); return; }
+        if (!controlsLeft) { setTimeout(init, 500); return; }
         if (document.getElementById("dynamic-island-viz")) return;
 
         const style = document.createElement("style");
@@ -135,19 +171,40 @@
         controlsLeft.prepend(container);
         const bars = container.querySelectorAll(".viz-pill");
 
-        Spicetify.Player.addEventListener("songchange", refreshVisuals);
-        Spicetify.Player.addEventListener("onplaypause", refreshVisuals);
+        // Use PlayerAPI._events for song change detection
+        // Also keep Spicetify.Player.addEventListener as a fallback
+        try {
+            Spicetify.Platform.PlayerAPI._events.addListener('update', refreshVisuals);
+        } catch (e) {
+            // Fallback to Player wrapper events if _events doesn't work
+            try {
+                Spicetify.Player.addEventListener("songchange", refreshVisuals);
+                Spicetify.Player.addEventListener("onplaypause", refreshVisuals);
+            } catch (e2) {
+                console.warn('[DynamicViz] Could not attach events, polling instead');
+            }
+        }
         refreshVisuals();
 
         function animate() {
-            if (Spicetify.Player.isPlaying() && audioData) {
-                const lookaheadTime = 0.050; 
-                const progress = (Spicetify.Player.getProgress() / 1000) + lookaheadTime;
+            const state = getPlayerState();
+            
+            // Read play state directly from PlayerAPI._state
+            // isPaused is the reliable field in the internal state
+            const isPlaying = state && state.isPaused === false;
+
+            if (isPlaying && audioData) {
+                // Calculate progress from PlayerAPI._state timestamps
+                let progress = 0;
+                if (state.positionAsOfTimestamp != null && state.timestamp) {
+                    const elapsed = Date.now() - state.timestamp;
+                    progress = ((state.positionAsOfTimestamp + elapsed) / 1000) + 0.050;
+                }
                 
                 const segment = audioData.find(s => progress >= s.start && progress < (s.start + s.duration));
                 const beat = beats.find(b => progress >= b.start && progress < (b.start + b.duration));
                 
-                // Beat Impact
+                // Beat Impact (Decays over 80% of beat duration)
                 const impact = beat ? Math.max(0, 1 - (progress - beat.start) / (beat.duration * 0.8)) : 0;
 
                 if (segment) {
@@ -195,5 +252,3 @@
     }
     init();
 })();
-
-
