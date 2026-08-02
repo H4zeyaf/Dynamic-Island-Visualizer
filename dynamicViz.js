@@ -1,8 +1,8 @@
 // NAME: Dynamic Island Visualizer
 // AUTHOR: Gemini & [Your Name]
-// VERSION: 7.0
+// VERSION: 7.1
 // DESCRIPTION: Dynamic Island style with Pitch-Specific Physics and Dribbblish Theme Sync.
-// Uses Platform.PlayerAPI directly to bypass broken Spicetify.Player wrapper (v2.43+).
+// Auto-refreshes tokens and periodically retries fetching audio data if missing.
 
 (async function DynamicViz() {
     const BAR_SELECTOR = ".player-controls__left";
@@ -84,37 +84,75 @@
         return await getVibrantAverageColor();
     }
 
+    // Tracks state for automatic re-fetching
+    let lastFetchedTrackUri = null;
+    let isFetchingAudioData = false;
+    let lastFetchAttemptTime = 0;
+
     // Bypass broken Spicetify.getAudioData and CosmosAsync
-    // Use fetch() with the session access token directly
-    async function fetchAudioData(uri) {
+    // Dynamically fetches the current session access token and retries on 401 / expired token
+    async function fetchAudioData(uri, retries = 2) {
         const trackId = uri.split(':').pop();
-        const token = Spicetify.Platform.Session.accessToken;
         const url = `https://spclient.wg.spotify.com/audio-attributes/v1/audio-analysis/${trackId}?format=json`;
-        const res = await fetch(url, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-        if (!res.ok) throw new Error(`Audio data fetch failed: ${res.status}`);
-        return res.json();
+
+        for (let attempt = 0; attempt <= retries; attempt++) {
+            try {
+                // Always grab the latest token dynamically
+                const token = Spicetify.Platform?.Session?.accessToken;
+                if (!token) {
+                    throw new Error("Access token unavailable");
+                }
+
+                const res = await fetch(url, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                if (res.ok) {
+                    return await res.json();
+                }
+
+                if (res.status === 401 && attempt < retries) {
+                    console.warn(`[DynamicViz] Token expired or 401 Unauthorized (attempt ${attempt + 1}/${retries + 1}). Retrying in 1.5s...`);
+                    await new Promise(r => setTimeout(r, 1500));
+                    continue;
+                }
+
+                throw new Error(`Audio data fetch failed: ${res.status}`);
+            } catch (err) {
+                if (attempt === retries) throw err;
+                await new Promise(r => setTimeout(r, 1000));
+            }
+        }
     }
 
-    async function refreshVisuals() {
+    async function refreshVisuals(force = false) {
         const state = getPlayerState();
-        if (!state) return;
-        
-        // PlayerAPI._state uses .item for the current track
-        const trackObj = state.item;
-        if (!trackObj || !trackObj.uri) return;
-        
+        if (!state || !state.item || !state.item.uri) return;
+
+        const currentUri = state.item.uri;
+
+        // Skip if already loaded for this track (unless forcing)
+        if (!force && audioData && lastFetchedTrackUri === currentUri) return;
+
+        // Avoid concurrent requests
+        if (isFetchingAudioData) return;
+        isFetchingAudioData = true;
+        lastFetchedTrackUri = currentUri;
+        lastFetchAttemptTime = Date.now();
+
         try {
-            const data = await fetchAudioData(trackObj.uri);
+            const data = await fetchAudioData(currentUri);
             if (data) { 
                 audioData = data.segments || null; 
                 beats = data.beats || []; 
                 loudnessHistory = [];
+                console.log('[DynamicViz] Successfully loaded audio analysis for:', currentUri);
             }
         } catch (e) { 
             console.warn('[DynamicViz] Failed to get audio data:', e);
             audioData = null; 
+        } finally {
+            isFetchingAudioData = false;
         }
 
         const color = await getSyncColor();
@@ -192,6 +230,11 @@
             // Read play state directly from PlayerAPI._state
             // isPaused is the reliable field in the internal state
             const isPlaying = state && state.isPaused === false;
+
+            // Auto-recovery: if playing but audioData failed (e.g. token expired at startup), retry every 4s
+            if (isPlaying && !audioData && !isFetchingAudioData && (Date.now() - lastFetchAttemptTime > 4000)) {
+                refreshVisuals(true);
+            }
 
             if (isPlaying && audioData) {
                 // Calculate progress from PlayerAPI._state timestamps
